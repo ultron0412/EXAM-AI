@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict
+import importlib
 import logging
 from typing import Any
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from app.services.preprocessor import PreparedQuestion
 
@@ -17,19 +16,32 @@ logger = logging.getLogger(__name__)
 class FeatureExtractor:
     def __init__(self, sentence_model_name: str = "all-MiniLM-L6-v2"):
         self.sentence_model_name = sentence_model_name
-        self._sentence_model = None
+        self._sentence_model: Any | None = None
         self._try_load_sentence_model()
 
     def _try_load_sentence_model(self) -> None:
         try:
-            from sentence_transformers import SentenceTransformer
-
+            sentence_transformers = importlib.import_module("sentence_transformers")
+            SentenceTransformer = getattr(sentence_transformers, "SentenceTransformer")
             self._sentence_model = SentenceTransformer(self.sentence_model_name)
         except Exception as exc:
             logger.warning("SentenceTransformer unavailable, using TF-IDF fallback: %s", exc)
             self._sentence_model = None
 
+    def _import_tfidf_components(self) -> tuple[Any | None, Any | None]:
+        try:
+            tfidf_mod = importlib.import_module("sklearn.feature_extraction.text")
+            metrics_mod = importlib.import_module("sklearn.metrics.pairwise")
+            return tfidf_mod.TfidfVectorizer, metrics_mod.cosine_similarity
+        except Exception as exc:
+            logger.warning("Scikit-learn unavailable: %s", exc)
+            return None, None
+
     def _fallback_topics_from_questions(self, questions: list[PreparedQuestion]) -> list[str]:
+        TfidfVectorizer, _ = self._import_tfidf_components()
+        if TfidfVectorizer is None:
+            return ["General Concepts", "Important Problems", "Theory"]
+
         text = " ".join(q.question for q in questions)
         vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), max_features=40)
         matrix = vectorizer.fit_transform([text])
@@ -43,19 +55,27 @@ class FeatureExtractor:
     ) -> np.ndarray:
         if self._sentence_model is None:
             raise RuntimeError("Sentence model not initialized")
+        _, cosine_similarity = self._import_tfidf_components()
+        if cosine_similarity is None:
+            raise RuntimeError("Scikit-learn not available")
+
         topic_embeddings = self._sentence_model.encode(topics, normalize_embeddings=True)
         question_embeddings = self._sentence_model.encode(
             [q.question for q in questions], normalize_embeddings=True
         )
-        return cosine_similarity(question_embeddings, topic_embeddings)
+        return np.asarray(cosine_similarity(question_embeddings, topic_embeddings), dtype=float)
 
     def _tfidf_similarity(self, topics: list[str], questions: list[PreparedQuestion]) -> np.ndarray:
+        TfidfVectorizer, cosine_similarity = self._import_tfidf_components()
+        if TfidfVectorizer is None or cosine_similarity is None:
+            raise RuntimeError("Scikit-learn not available")
+
         vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), max_features=3000)
         corpus = topics + [q.question for q in questions]
         tfidf = vectorizer.fit_transform(corpus)
         topic_matrix = tfidf[: len(topics)]
         question_matrix = tfidf[len(topics) :]
-        return cosine_similarity(question_matrix, topic_matrix)
+        return np.asarray(cosine_similarity(question_matrix, topic_matrix), dtype=float)
 
     def map_questions_to_topics(
         self, topics: list[str], questions: list[PreparedQuestion]
@@ -98,4 +118,3 @@ class FeatureExtractor:
             "topic_distribution": topic_distribution,
             "question_vectors": sim.tolist(),
         }
-
