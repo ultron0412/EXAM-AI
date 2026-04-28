@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     huggingface_api_url: str = "https://api-inference.huggingface.co/models"
     huggingface_timeout_seconds: int = 120
     sentence_transformer_model: str = "all-MiniLM-L6-v2"
+    document_ai_enabled: bool = True
+    document_ai_model: str = "naver-clova-ix/donut-base-finetuned-docvqa"
+    document_ai_prompt: str = (
+        "<s_docvqa><s_question>What text is written in this exam document?</s_question><s_answer>"
+    )
+    document_ai_max_pages: int = 3
+    document_ai_max_length: int = 768
     max_text_chars: int = 120_000
     default_top_n: int = 30
 
