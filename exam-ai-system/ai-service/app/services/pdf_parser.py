@@ -5,9 +5,13 @@ import re
 import zipfile
 from xml.etree import ElementTree
 
+from app.core.config import get_settings
+from app.services.donut_document_model import get_donut_document_model
+
 
 MIN_USEFUL_TEXT_CHARS = 40
 MIN_USEFUL_WORDS = 8
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def _is_useful_text(text: str) -> bool:
@@ -88,6 +92,21 @@ def _extract_text_from_docx(path: Path) -> str:
     return "\n".join(paragraphs)
 
 
+def _extract_with_donut(path: Path) -> str:
+    settings = get_settings()
+    if not settings.document_ai_enabled:
+        return ""
+    extractor = get_donut_document_model(
+        settings.document_ai_model,
+        settings.document_ai_max_length,
+    )
+    return extractor.extract_text_from_path(
+        str(path),
+        prompt=settings.document_ai_prompt,
+        max_pages=settings.document_ai_max_pages,
+    )
+
+
 def extract_text_from_pdf(pdf_path: str) -> str:
     path = Path(pdf_path)
     if not path.exists():
@@ -98,6 +117,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
             return _extract_text_from_docx(path)
         except Exception:
             return ""
+    if suffix in IMAGE_SUFFIXES:
+        return _extract_with_donut(path)
     if suffix != ".pdf":
         try:
             return path.read_text(encoding="utf-8", errors="ignore")
@@ -112,6 +133,10 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         pass
 
     try:
-        return _extract_with_pypdf2(path)
+        text = _extract_with_pypdf2(path)
+        if _is_useful_text(text):
+            return text
     except Exception:
-        return ""
+        pass
+
+    return _extract_with_donut(path)
