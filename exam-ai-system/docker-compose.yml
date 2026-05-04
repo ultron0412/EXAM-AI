@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: exam-ai-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  ai-service:
+    build:
+      context: ./ai-service
+    container_name: exam-ai-ai-service
+    environment:
+      AI_SERVICE_HOST: 0.0.0.0
+      AI_SERVICE_PORT: 8000
+      LLM_PROVIDER: ${AI_LLM_PROVIDER:-lmstudio}
+      LM_STUDIO_BASE_URL: ${AI_LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1/chat/completions}
+      LM_STUDIO_MODEL: ${AI_LM_STUDIO_MODEL:-mistral-7b-instruct}
+      HUGGINGFACE_API_KEY: ${AI_HUGGINGFACE_API_KEY:-}
+      HUGGINGFACE_MODEL: ${AI_HUGGINGFACE_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
+      HUGGINGFACE_API_URL: ${AI_HUGGINGFACE_API_URL:-https://api-inference.huggingface.co/models}
+      SENTENCE_TRANSFORMER_MODEL: ${AI_SENTENCE_MODEL:-all-MiniLM-L6-v2}
+      DOCUMENT_AI_ENABLED: ${AI_DOCUMENT_AI_ENABLED:-true}
+      DOCUMENT_AI_MODEL: ${AI_DOCUMENT_AI_MODEL:-naver-clova-ix/donut-base-finetuned-docvqa}
+      DOCUMENT_AI_PROMPT: ${AI_DOCUMENT_AI_PROMPT:-<s_docvqa><s_question>What text is written in this exam document?</s_question><s_answer>}
+      DOCUMENT_AI_MAX_PAGES: ${AI_DOCUMENT_AI_MAX_PAGES:-3}
+      DOCUMENT_AI_MAX_LENGTH: ${AI_DOCUMENT_AI_MAX_LENGTH:-768}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ai-service/app:/app/app
+      - ./data:/data
+
+  server:
+    build:
+      context: ./server
+    container_name: exam-ai-server
+    depends_on:
+      - mongo
+      - ai-service
+    environment:
+      NODE_ENV: development
+      PORT: 5000
+      MONGO_URI: mongodb://mongo:27017/exam-ai
+      JWT_SECRET: ${SERVER_JWT_SECRET:-change-this-secret}
+      JWT_EXPIRES_IN: 7d
+      CLIENT_URL: ${SERVER_CLIENT_URL:-http://localhost:5173}
+      AI_SERVICE_URL: http://ai-service:8000
+      UPLOAD_DIR: ${SERVER_UPLOAD_DIR:-../data/raw}
+      MAX_UPLOAD_SIZE_MB: ${SERVER_MAX_UPLOAD_SIZE_MB:-15}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./server/src:/app/src
+      - ./data:/data
+      - ./server/uploads:/app/uploads
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      target: build
+    image: exam-ai-client-build
+    container_name: exam-ai-client-dev
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_API_BASE_URL: ${CLIENT_API_BASE_URL:-http://localhost:5000/api}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    depends_on:
+      - server
+
+volumes:
+  mongo_data:
